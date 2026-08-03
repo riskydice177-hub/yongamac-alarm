@@ -12,14 +12,12 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
 
     steps:
-      - name: 코드 가져오기
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 파이썬 준비
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -34,9 +32,10 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          CGV_THEATER_CODE: "0013"
+          CGV_SITE_NO: "0013"
           CGV_THEATER_NAME: "용아맥"
           CGV_FORMATS: "IMAX,아이맥스"
           CGV_DAYS_AHEAD: "21"
-          CGV_HOT_PER_CYCLE: "40"
-        run: python3 yongamac_alarm.py --once
+          CGV_HOT_PER_CYCLE: "30"
+          PYTHONUTF8: "1"
+        run: python yongamac_alarm.py --once
