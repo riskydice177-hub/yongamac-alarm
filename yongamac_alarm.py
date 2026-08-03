@@ -60,6 +60,8 @@ POLL_SECONDS = int(os.environ.get("CGV_POLL_SECONDS", "25"))   # 20 미만 비�
 HOT_PER_CYCLE = int(os.environ.get("CGV_HOT_PER_CYCLE", "8"))  # 사이클당 미오픈 날짜 조회 수
 COLD_EVERY = int(os.environ.get("CGV_COLD_EVERY", "8"))        # 이미 열린 날짜 재확인 주기
 
+HEARTBEAT_HOURS = int(os.environ.get("CGV_HEARTBEAT_HOURS", "1"))  # 0 이면 끔
+
 TIMEOUT = 12
 STATE_PATH = os.environ.get("CGV_STATE_PATH", "yongamac_state.json")
 
@@ -278,6 +280,16 @@ def target_dates() -> list:
             for d in range(DAYS_AHEAD + 1)]
 
 
+def _hour_gap(a: str, b: str) -> int:
+    """'YYYYMMDDHH' 두 개의 시간 차이(시간 단위)."""
+    try:
+        fa = datetime.strptime(a, "%Y%m%d%H")
+        fb = datetime.strptime(b, "%Y%m%d%H")
+        return int(abs((fb - fa).total_seconds()) // 3600)
+    except ValueError:
+        return 99
+
+
 def pretty(ymd: str) -> str:
     d = datetime.strptime(ymd, "%Y%m%d").date()
     return f"{d.month}/{d.day}({'월화수목금토일'[d.weekday()]})"
@@ -340,6 +352,28 @@ def run_cycle(st: dict, cycle: int) -> None:
         time.sleep(random.uniform(0.4, 0.9))
 
 
+def summary(st: dict, header: str, cycles: int = 0, started: float = 0.0) -> str:
+    """하트비트 본문. 지금 무엇을 어디까지 보고 있는지 한눈에."""
+    dates = target_dates()
+    opened = [d for d in dates if st.get(d, {}).get("n", 0) > 0]
+    total = sum(st.get(d, {}).get("n", 0) for d in dates)
+    frontier = [d for d in dates if st.get(d, {}).get("n", 0) == 0]
+
+    lines = [header]
+    if opened:
+        lines.append(f"예매 열린 마지막 날: {pretty(opened[-1])}")
+        lines.append(f"감시 중 회차: {total}개 ({len(opened)}일)")
+    else:
+        lines.append("현재 열린 회차 없음")
+    if frontier:
+        lines.append(f"다음 오픈 대기: {pretty(frontier[0])} 이후")
+    lines.append(f"감시 대상: {', '.join(FORMAT_KEYWORDS)} / {THEATER_NAME}")
+    if started:
+        up = int(time.time() - started)
+        lines.append(f"가동 {up // 3600}시간 {up % 3600 // 60}분 · 조회 {cycles}회")
+    return "\n".join(lines)
+
+
 def watch(once: bool = False) -> None:
     st = load_state()
     if not st.get("_initialized"):
@@ -360,8 +394,16 @@ def watch(once: bool = False) -> None:
         st["_initialized"] = True
         save_state(st)
         log(f"기준선 완료 — 총 {total}회차")
-        notify(f"✅ {THEATER_NAME} 알리미 가동\n감시: {', '.join(FORMAT_KEYWORDS)}\n"
-               f"범위: 오늘~{DAYS_AHEAD}일 후\n현재 {total}회차 확인됨", silent=True)
+
+    # 시작할 때마다 현황 보고 (재시작 포함)
+    started = time.time()
+    cur_hour = datetime.now(KST).strftime("%Y%m%d%H")
+    st["_last_hb"] = cur_hour
+    msg = summary(st, f"✅ {THEATER_NAME} 알리미 가동 시작")
+    log(msg)
+    if not once:
+        notify(msg, silent=True)
+    save_state(st)
 
     cycle = int(time.time() // 300) if once else 0
     fails = 0
@@ -371,6 +413,17 @@ def watch(once: bool = False) -> None:
             if fails >= 3:
                 notify("🟢 알리미 복구됨", silent=True)
             fails = 0
+
+            # 매시 정각 하트비트 — 살아있다는 증거
+            now_hour = datetime.now(KST).strftime("%Y%m%d%H")
+            if HEARTBEAT_HOURS > 0 and now_hour != st.get("_last_hb"):
+                last = st.get("_last_hb") or ""
+                gap = 99 if not last else _hour_gap(last, now_hour)
+                if gap >= HEARTBEAT_HOURS:
+                    st["_last_hb"] = now_hour
+                    hb = summary(st, "🟢 정상 작동 중", cycle, started)
+                    log(hb)
+                    notify(hb, silent=True)
             save_state(st)
         except KeyboardInterrupt:
             save_state(st)
